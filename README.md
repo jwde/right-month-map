@@ -2,7 +2,20 @@
 
 A zoomable world map that shows, for any month, whether it is a good time of year to visit each place, compared with that place's own year.
 
-Everything is in `index.html`; there is no build step.
+The site is the single file `index.html`, with the climate grid, borders and place names embedded in it. Hosting needs no build step.
+
+## Rebuilding
+
+`index.html` is generated from `build/template.html`. To change the page, edit the template and rebuild. Run these from the repo root; they need Python 3 and no extra packages.
+
+```sh
+sh build/fetch.sh               # download the source data into build/data (about 95 MB)
+python3 build/make_grid.py      # climate grid, takes about a minute
+python3 build/make_vectors.py   # borders and place names
+python3 build/build.py          # writes index.html
+```
+
+The scoring formula lives in `computeScores()` in the template. GeoNames updates daily, so a fresh download changes the place list slightly.
 
 ## Data and credits
 

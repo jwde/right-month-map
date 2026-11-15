@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="A zoomable world map that shows, for any month, whether it is a good time of year to visit each place.">
+<title>Right Month Map</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; }
+img { max-width: 100%; }
+[hidden] { display: none !important; }
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 100 900; font-display: swap; src: url(fonts/inter-latin.woff2) format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 300 700; font-display: swap; src: url(fonts/space-grotesk-latin.woff2) format("woff2"); }
+/* Layout: a one-screen atlas. Controls in a strip on top, the map fills the stage, a place sheet sits beside it (below it on phones). */
+:root {
+  --bg: #f4f5f3; --surface: #fcfcfb; --ink: #14181a; --ink-2: #4f5654; --ink-3: #868c89;
+  --line: #dcdfdb; --accent: #1f5f8b; --accent-ink: #ffffff; --sel: #e6eef3;
+  --ocean: #e3e9ec; --border-line: #5b6462; --label: #14181a; --halo: #fcfcfb;
+  --d0: #1c5cab; --d1: #7fb0ea; --d2: #eeeeea; --d3: #f2a47c; --d4: #c7481a;
+  --q0: #eef1ec; --q1: #7cc7a5; --q2: #0c6a49;
+  --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #101314; --surface: #181c1d; --ink: #eef0ee; --ink-2: #b9bfbc; --ink-3: #858c89;
+  --line: #2b3132; --accent: #7db7e0; --accent-ink: #0d1416; --sel: #223039;
+  --ocean: #0c1012; --border-line: #c9cfcc; --label: #f2f4f2; --halo: #101314;
+  --d0: #4f95ea; --d1: #2e5f9f; --d2: #3a3d3b; --d3: #a8562f; --d4: #f07a44;
+  --q0: #2a302d; --q1: #1f8a63; --q2: #58e0ae;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #101314; --surface: #181c1d; --ink: #eef0ee; --ink-2: #b9bfbc; --ink-3: #858c89;
+  --line: #2b3132; --accent: #7db7e0; --accent-ink: #0d1416; --sel: #223039;
+  --ocean: #0c1012; --border-line: #c9cfcc; --label: #f2f4f2; --halo: #101314;
+  --d0: #4f95ea; --d1: #2e5f9f; --d2: #3a3d3b; --d3: #a8562f; --d4: #f07a44;
+  --q0: #2a302d; --q1: #1f8a63; --q2: #58e0ae;
+  color-scheme: dark }
+
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.45;
+  display: flex; flex-direction: column; }
+button, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.top { padding-block: 12px 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+.head p { margin: 0; color: var(--ink-2); }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.group > span { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); white-space: nowrap; }
+.seg { display: flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.seg button { border: 0; background: transparent; padding: 6px 9px; cursor: pointer; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+select { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); padding: 6px 8px; }
+
+.stage { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
+.mapwrap { position: relative; min-height: 0; min-width: 0; background: var(--ocean); overflow: hidden; }
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; display: block; }
+canvas.drag { cursor: grabbing; }
+.zoom { position: absolute; top: 12px; right: max(12px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.zoom button { border: 0; background: transparent; width: 34px; height: 32px; font-size: 18px; line-height: 1; cursor: pointer; }
+.zoom button + button { border-top: 1px solid var(--line); }
+.zoom button:hover { background: var(--sel); }
+.legend { position: absolute; left: max(12px, env(safe-area-inset-left, 0px)); bottom: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: min(260px, calc(100% - 24px)); }
+.legend .ramp { height: 10px; border-radius: 3px; }
+.legend .ends { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-2); margin-top: 4px; gap: 8px; }
+.legend .note { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; max-width: 240px; box-shadow: 0 2px 10px rgb(0 0 0 / 0.12); }
+.tip b { display: block; font-weight: 600; }
+.tip span { color: var(--ink-2); }
+.loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-2); }
+
+.panel { border-left: 1px solid var(--line); background: var(--surface); overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.panel h2 { font-family: var(--font-display); font-weight: 600; font-size: 18px; margin: 0; text-wrap: balance; }
+.coords { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.verdict { display: flex; gap: 10px; align-items: flex-start; }
+.chip { flex: none; width: 14px; height: 14px; border-radius: 4px; margin-top: 3px; border: 1px solid var(--line); }
+.verdict strong { display: block; font-size: 15px; font-weight: 600; }
+.verdict span { color: var(--ink-2); }
+.facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.facts div { min-width: 0; }
+.facts dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+.facts dd { margin: 0; font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+caption { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); padding-bottom: 4px; }
+th { font-weight: 500; font-size: 11px; color: var(--ink-3); text-align: right; padding: 2px 4px; }
+th:first-child, td:first-child { text-align: left; }
+td { padding: 0 4px; text-align: right; color: var(--ink-2); white-space: nowrap; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--sel); }
+tbody tr[aria-selected="true"] { background: var(--sel); }
+tbody tr[aria-selected="true"] td { color: var(--ink); font-weight: 600; }
+td button { border: 0; background: none; padding: 5px 0; cursor: pointer; width: 100%; text-align: left; }
+td.barcell { width: 38%; padding-right: 8px; }
+.bar { height: 10px; border-radius: 0 4px 4px 0; min-width: 2px; }
+.fine { color: var(--ink-3); font-size: 12px; margin: 0; }
+.fine a { color: inherit; }
+
+@media (max-width: 760px) {
+  html, body { height: auto; }
+  .stage { display: flex; flex-direction: column; }
+  .mapwrap { height: 58vh; min-height: 320px; }
+  .panel { border-left: 0; border-top: 1px solid var(--line); overflow: visible;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .seg button { padding: 6px 7px; }
+}
+</style>
+</head>
+<body>
+
+
+<div class="top">
+  <div class="head">
+    <h1>Right Month Map</h1>
+    <p>Pick a month. The map shows whether it is a good time of year for each place. A rough guide from long-term averages, not a forecast.</p>
+  </div>
+  <div class="controls">
+    <div class="group"><span id="lbl-month">Month</span><div class="seg" id="months" role="group" aria-labelledby="lbl-month"></div></div>
+    <div class="group"><span id="lbl-mode">Colour by</span>
+      <div class="seg" id="modes" role="group" aria-labelledby="lbl-mode">
+        <button type="button" id="mode-rel" data-mode="rel">Right month for the place</button>
+        <button type="button" id="mode-abs" data-mode="abs">Weather quality</button>
+      </div></div>
+    <div class="group"><label for="style"><span>Trip</span></label>
+      <select id="style">
+        <option value="balanced">Sightseeing, mild to warm</option>
+        <option value="beach">Beach, hot is fine</option>
+        <option value="cool">Hiking, cool is fine</option>
+      </select></div>
+    <div class="group"><span id="lbl-unit">Units</span>
+      <div class="seg" id="units" role="group" aria-labelledby="lbl-unit">
+        <button type="button" id="unit-f" data-unit="F">°F</button>
+        <button type="button" id="unit-c" data-unit="C">°C</button>
+      </div></div>
+  </div>
+</div>
+
+<div class="stage">
+  <div class="mapwrap" id="mapwrap">
+    <canvas id="map" aria-label="World map coloured by how good the selected month is for each place"></canvas>
+    <div class="loading" id="loading">Loading climate data…</div>
+    <div class="zoom">
+      <button type="button" id="zin" aria-label="Zoom in">+</button>
+      <button type="button" id="zout" aria-label="Zoom out">−</button>
+      <button type="button" id="zreset" aria-label="Show whole world" title="Show whole world">⌂</button>
+    </div>
+    <div class="legend" id="legend">
+      <div class="ramp" id="ramp"></div>
+      <div class="ends"><span id="leg-lo"></span><span id="leg-hi"></span></div>
+      <div class="note" id="leg-note"></div>
+    </div>
+    <div class="tip" id="tip" hidden></div>
+  </div>
+  <aside class="panel" id="panel" aria-live="polite">
+    <div>
+      <h2 id="p-title">Click the map to pick a place</h2>
+      <div class="coords" id="p-coords"></div>
+    </div>
+    <div class="verdict"><div class="chip" id="p-chip"></div><div><strong id="p-verdict"></strong><span id="p-sub"></span></div></div>
+    <dl class="facts" id="p-facts"></dl>
+    <table>
+      <caption>All twelve months here</caption>
+      <thead><tr><th scope="col">Month</th><th scope="col" style="text-align:left">Score</th><th scope="col">High / low</th><th scope="col">Rain</th></tr></thead>
+      <tbody id="p-rows"></tbody>
+    </table>
+    <p class="fine" id="p-best"></p>
+    <p class="fine">Scores combine daytime temperature, humidity, rain and sunshine. They are long-term averages for 1961–1990 on a grid of about 35 km, so recent years run a little warmer, and small islands and steep mountains are approximate. Crowds, prices, storm seasons and smoke are not included. Climate data: <a href="https://crudata.uea.ac.uk/cru/data/hrg/tmc/">CRU CL v2.0</a> (New et al., 2002). Place names: <a href="https://www.geonames.org/">GeoNames</a>, CC BY 4.0. Outlines and islands: <a href="https://www.naturalearthdata.com/">Natural Earth</a>. Borders are approximate and do not imply any position on disputed territory.</p>
+  </aside>
+</div>
+
+<script type="text/plain" id="grid">__GRID__</script>
+<script type="application/json" id="borders">__BORDERS__</script>
+<script type="application/json" id="cities">__CITIES__</script>
+<script>
+(() => {
+const W = 1080, H = 435, LATN = 85, LATS = -60, RES = 3, N = W * H;
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTH = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DAYS = [31,28.25,31,30,31,30,31,31,30,31,30,31];
+const STY = { balanced: [6,21,32,44], beach: [16,26,35,45], cool: [0,13,24,36] };
+const STYNAME = { balanced: "sightseeing", beach: "a beach trip", cool: "hiking" };
+const $ = id => document.getElementById(id);
+const cl = x => x < 0 ? 0 : x > 1 ? 1 : x;
+const ord = n => n + (n === 1 ? "st" : n === 2 ? "nd" : n === 3 ? "rd" : "th");
+
+const st = { month: 11, mode: "rel", style: "balanced", unit: "F", sel: null };
+try { Object.assign(st, JSON.parse(localStorage.getItem("rmm") || "{}")); } catch (e) {}
+const save = () => { try { localStorage.setItem("rmm", JSON.stringify({ month: st.month, mode: st.mode, style: st.style, unit: st.unit, sel: st.sel })); } catch (e) {} };
+
+/* ---------- projection (web mercator, world x,y in 0..1) ---------- */
+const lat2y = lat => 0.5 - Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) / (2 * Math.PI);
+const y2lat = y => (2 * Math.atan(Math.exp((0.5 - y) * 2 * Math.PI)) - Math.PI / 2) * 180 / Math.PI;
+const YN = lat2y(LATN), YS = lat2y(LATS);
+
+/* ---------- data ---------- */
+let L = 0, cellK, lay = [], S, MIN, MAX, idx;
+async function loadGrid() {
+  const bin = atob($("grid").textContent.trim());
+  const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  const stream = new Blob([u]).stream().pipeThrough(new DecompressionStream("deflate"));
+  const buf = new Uint8Array(await new Response(stream).arrayBuffer());
+  cellK = new Int32Array(N).fill(-1);
+  for (let i = 0; i < N; i++) if ((buf[i >> 3] >> (i & 7)) & 1) cellK[i] = L++;
+  let p = (N + 7) >> 3;
+  for (let l = 0; l < 6; l++) {
+    const a = new Uint8Array(12 * L);
+    for (let m = 0; m < 12; m++) {
+      let prev = 0;
+      for (let k = 0; k < L; k++) {
+        const d = (buf[p++] + prev) & 255; prev = d;
+        a[m * L + k] = m ? (d + a[(m - 1) * L + k]) & 255 : d;
+      }
+    }
+    lay.push(a);
+  }
+  S = new Float32Array(12 * L); MIN = new Float32Array(L); MAX = new Float32Array(L); idx = new Uint8Array(L);
+}
+function cell(k, m) {
+  const o = m * L + k;
+  return { tmax: lay[0][o] / 2 - 50, tmin: lay[1][o] / 2 - 50, pre: (lay[2][o] / 6) ** 2, wet: lay[3][o] / 8, sun: lay[4][o] / 2.5, reh: lay[5][o] / 2.5 };
+}
+function computeScores() {
+  const [a, b, c, d] = STY[st.style];
+  const TX = lay[0], TN = lay[1], PR = lay[2], WT = lay[3], SN = lay[4], RH = lay[5];
+  MIN.fill(2); MAX.fill(-1);
+  for (let m = 0; m < 12; m++) for (let k = 0; k < L; k++) {
+    const o = m * L + k;
+    const tmax = TX[o] / 2 - 50, tm = (tmax + TN[o] / 2 - 50) / 2;
+    const e = RH[o] / 250 * 6.112 * Math.exp(17.67 * tm / (tm + 243.5));
+    const f = tmax + Math.max(0, 0.6 * 5 / 9 * (e - 10));
+    const T = f < b ? cl((f - a) / (b - a)) : f <= c ? 1 : cl((d - f) / (d - c));
+    const mm = (PR[o] / 6) ** 2;
+    const R = 0.5 * (1 - cl((WT[o] / 8 / DAYS[m] - 0.15) / 0.5)) + 0.5 * (1 - cl((mm - 25) / 225));
+    const Sn = cl((SN[o] / 2.5 - 20) / 50);
+    const s = (0.5 * T + 0.33 * R + 0.17 * Sn) * (0.35 + 0.65 * Math.min(1, T / 0.5)) * (0.6 + 0.4 * Math.min(1, R / 0.4));
+    S[o] = s; if (s < MIN[k]) MIN[k] = s; if (s > MAX[k]) MAX[k] = s;
+  }
+}
+function colorIndex(k, m) {
+  const s = S[m * L + k];
+  if (st.mode === "abs") return Math.round(cl(s) * 255);
+  const range = MAX[k] - MIN[k];
+  const rel = range > 1e-6 ? (s - MIN[k]) / range : 0.5;
+  return Math.round((0.5 + (rel - 0.5) * cl(range / 0.15)) * 255);
+}
+
+/* ---------- colours ---------- */
+let lut = new Uint32Array(256), lutCss = [], css = {};
+function readTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const g = n => cs.getPropertyValue(n).trim();
+  css = { ocean: g("--ocean"), line: g("--border-line"), label: g("--label"), halo: g("--halo"), accent: g("--accent") };
+  const stops = (st.mode === "abs" ? ["--q0","--q1","--q2"] : ["--d0","--d1","--d2","--d3","--d4"]).map(n => {
+    const h = g(n).replace("#", ""); return [0, 2, 4].map(i => parseInt(h.slice(i, i + 2), 16));
+  });
+  lutCss = [];
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255 * (stops.length - 1), j = Math.min(stops.length - 2, Math.floor(t)), f = t - j;
+    const c = [0, 1, 2].map(q => Math.round(stops[j][q] + (stops[j + 1][q] - stops[j][q]) * f));
+    lut[i] = (255 << 24) | (c[2] << 16) | (c[1] << 8) | c[0];
+    lutCss.push(`rgb(${c[0]},${c[1]},${c[2]})`);
+  }
+  const names = st.mode === "abs" ? ["--q0","--q1","--q2"] : ["--d0","--d1","--d2","--d3","--d4"];
+  $("ramp").style.background = `linear-gradient(to right, ${names.map(n => `var(${n})`).join(",")})`;
+  $("leg-lo").textContent = st.mode === "abs" ? "Poor weather" : "Worst time of year";
+  $("leg-hi").textContent = st.mode === "abs" ? "Excellent" : "Best time of year";
+  $("leg-note").textContent = st.mode === "abs" ? "Same scale everywhere" : "Each place is compared with its own year. Grey: little seasonal difference.";
+}
+
+/* ---------- raster ---------- */
+const RW = 2160, RH_ = Math.round(RW * (YS - YN));
+const raster = document.createElement("canvas"); raster.width = RW; raster.height = RH_;
+const rctx = raster.getContext("2d");
+const rimg = rctx.createImageData(RW, RH_), rpx = new Uint32Array(rimg.data.buffer);
+const rowSrc = new Int32Array(RH_);
+for (let r = 0; r < RH_; r++) rowSrc[r] = Math.min(H - 1, Math.max(0, Math.floor((LATN - y2lat(YN + (r + 0.5) / RW)) * RES)));
+function paintRaster() {
+  for (let k = 0; k < L; k++) idx[k] = colorIndex(k, st.month);
+  for (let r = 0, p = 0; r < RH_; r++) {
+    const base = rowSrc[r] * W;
+    for (let c = 0; c < RW; c++, p++) { const k = cellK[base + (c >> 1)]; rpx[p] = k < 0 ? 0 : lut[idx[k]]; }
+  }
+  rctx.putImageData(rimg, 0, 0);
+}
+
+/* ---------- vectors ---------- */
+let borderPath, cities = [];
+function loadVectors() {
+  const b = JSON.parse($("borders").textContent);
+  borderPath = new Path2D();
+  for (const a of b.a) {
+    let x = 0, y = 0, pen = false, pwx = 0;
+    for (let i = 0; i < a.length; i += 2) {
+      x += a[i]; y += a[i + 1];
+      const lon = x * b.s[0] + b.t[0], lat = y * b.s[1] + b.t[1];
+      if (lat < LATS - 3 || lat > 84.9) { pen = false; continue; }
+      const wx = (lon + 180) / 360, wy = lat2y(lat);
+      if (pen && Math.abs(wx - pwx) < 0.3) borderPath.lineTo(wx, wy); else { borderPath.moveTo(wx, wy); pen = true; }
+      pwx = wx;
+    }
+  }
+  const pj = JSON.parse($("cities").textContent);
+  cities = pj.p.map(c => ({ name: c[0], country: pj.cc[c[1]] || "", lon: c[2], lat: c[3], imp: c[4], isl: c[5] === 1, x: (c[2] + 180) / 360, y: lat2y(c[3]) }));
+}
+
+/* ---------- view ---------- */
+const cv = $("map"), ctx = cv.getContext("2d"), wrap = $("mapwrap");
+const view = { cx: 0.5, cy: 0.42, z: 800 };
+let cw = 0, ch = 0, dpr = 1, ready = false;
+const minZ = () => Math.max(cw, ch / (YS - YN));
+function clampView() {
+  view.z = Math.max(minZ(), Math.min(minZ() * 90, view.z));
+  const hx = cw / 2 / view.z, hy = ch / 2 / view.z;
+  view.cx = hx >= 0.5 ? 0.5 : Math.max(hx, Math.min(1 - hx, view.cx));
+  view.cy = hy * 2 >= YS - YN ? (YN + YS) / 2 : Math.max(YN + hy, Math.min(YS - hy, view.cy));
+}
+function resize() {
+  const r = wrap.getBoundingClientRect();
+  cw = Math.max(1, r.width); ch = Math.max(1, r.height); dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+  clampView(); draw();
+}
+const sx = x => (x - view.cx) * view.z + cw / 2, sy = y => (y - view.cy) * view.z + ch / 2;
+function draw() {
+  if (!ready) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = css.ocean; ctx.fillRect(0, 0, cw, ch);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(raster, sx(0), sy(YN), view.z, view.z * (YS - YN));
+  ctx.save();
+  ctx.translate(cw / 2 - view.cx * view.z, ch / 2 - view.cy * view.z); ctx.scale(view.z, view.z);
+  ctx.lineWidth = 0.6 / view.z; ctx.strokeStyle = css.line; ctx.globalAlpha = 0.55; ctx.lineJoin = "round";
+  ctx.stroke(borderPath);
+  ctx.restore();
+  // city labels
+  const zr = view.z / minZ(), minImp = zr < 1.5 ? 6000 : zr < 2.6 ? 2500 : zr < 5 ? 900 : zr < 9 ? 350 : zr < 16 ? 120 : zr < 28 ? 40 : zr < 45 ? 15 : 0;
+  const FONT = '500 11px Inter, system-ui, sans-serif', FONT_I = 'italic 500 11px Inter, system-ui, sans-serif';
+  let curFont = FONT; ctx.font = FONT; ctx.textBaseline = "middle"; ctx.lineJoin = "round";
+  const boxes = [];
+  for (const c of cities) {
+    if (c.imp < minImp || boxes.length > 260) break;
+    const x = sx(c.x), y = sy(c.y);
+    if (x < -20 || x > cw + 20 || y < -10 || y > ch + 10) continue;
+    const want = c.isl ? FONT_I : FONT; if (want !== curFont) { ctx.font = curFont = want; }
+    const w = ctx.measureText(c.name).width, bx = [x - 4, y - 8, x + 8 + w, y + 8];
+    if (boxes.some(o => bx[0] < o[2] && bx[2] > o[0] && bx[1] < o[3] && bx[3] > o[1])) continue;
+    boxes.push(bx);
+    ctx.fillStyle = css.label; if (!c.isl) { ctx.beginPath(); ctx.arc(x, y, 1.8, 0, 6.3); ctx.fill(); }
+    ctx.strokeStyle = css.halo; ctx.lineWidth = 3; ctx.globalAlpha = 0.85; ctx.strokeText(c.name, x + 6, y);
+    ctx.globalAlpha = 1; ctx.fillText(c.name, x + 6, y);
+  }
+  if (st.sel) {
+    const x = sx((st.sel[0] + 180) / 360), y = sy(lat2y(st.sel[1]));
+    ctx.lineWidth = 4; ctx.strokeStyle = css.halo; ctx.beginPath(); ctx.arc(x, y, 7, 0, 6.3); ctx.stroke();
+    ctx.lineWidth = 2; ctx.strokeStyle = css.label; ctx.beginPath(); ctx.arc(x, y, 7, 0, 6.3); ctx.stroke();
+  }
+}
+let raf = 0; const redraw = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); };
+function zoomAt(px, py, f) {
+  const wx = view.cx + (px - cw / 2) / view.z, wy = view.cy + (py - ch / 2) / view.z;
+  view.z *= f; clampView();
+  view.cx = wx - (px - cw / 2) / view.z; view.cy = wy - (py - ch / 2) / view.z; clampView(); redraw();
+}
+function lonLatAt(px, py) {
+  const wx = view.cx + (px - cw / 2) / view.z, wy = view.cy + (py - ch / 2) / view.z;
+  return [wx * 360 - 180, y2lat(wy)];
+}
+let approx = false;
+function kAt(lon, lat, nearest) {
+  approx = false;
+  if (lon < -180 || lon >= 180 || lat >= LATN || lat <= LATS) return -1;
+  const r0 = Math.floor((LATN - lat) * RES), c0 = Math.floor((lon + 180) * RES);
+  let k = cellK[r0 * W + c0];
+  if (k >= 0 || !nearest) return k;
+  let bd = 1e9;
+  for (let dr = -3; dr <= 3; dr++) for (let dc = -3; dc <= 3; dc++) {
+    const r = r0 + dr, c = (c0 + dc + W) % W; if (r < 0 || r >= H) continue;
+    const q = cellK[r * W + c], d = dr * dr + dc * dc;
+    if (q >= 0 && d < bd) { bd = d; k = q; }
+  }
+  approx = k >= 0; return k;
+}
+
+/* ---------- place info ---------- */
+function nearCity(lon, lat) {
+  let best = null, bd = 1e9; const cosl = Math.cos(lat * Math.PI / 180);
+  for (const c of cities) {
+    let dx = Math.abs(c.lon - lon); if (dx > 180) dx = 360 - dx;
+    const d = Math.hypot(dx * cosl, c.lat - lat) * 111;
+    if (d < 40) { best = c; bd = d; break; }
+    if (d < bd) { bd = d; best = c; }
+  }
+  if (!best || bd > 400) return null;
+  return { text: (bd < 40 ? "" : "Near ") + best.name + (best.country && best.country !== best.name ? ", " + best.country : ""), km: bd };
+}
+const fmtT = c => Math.round(st.unit === "F" ? c * 9 / 5 + 32 : c) + "°";
+const fmtR = mm => st.unit === "F" ? (mm / 25.4).toFixed(mm < 25.4 ? 1 : 1) + " in" : Math.round(mm) + " mm";
+const fmtLL = (lon, lat) => `${Math.abs(lat).toFixed(1)}°${lat >= 0 ? "N" : "S"}, ${Math.abs(lon).toFixed(1)}°${lon >= 0 ? "E" : "W"}`;
+function ranking(k) {
+  const order = [...Array(12).keys()].sort((a, b) => S[b * L + k] - S[a * L + k]);
+  const rank = new Array(12); order.forEach((m, i) => rank[m] = i + 1);
+  return { order, rank };
+}
+const qual = s => s >= 0.8 ? "excellent" : s >= 0.62 ? "good" : s >= 0.42 ? "fair" : s >= 0.22 ? "poor" : "bad";
+function verdict(k, m) {
+  const { rank } = ranking(k), r = rank[m], range = MAX[k] - MIN[k], s = S[m * L + k];
+  let head;
+  if (range < 0.08) head = "Much the same all year here";
+  else if (r === 1) head = `${MONTH[m]} is the best month here`;
+  else if (r <= 3) head = `${MONTH[m]} is one of the best months here`;
+  else if (r <= 6) head = `${MONTH[m]} is decent, but not the best time`;
+  else if (r <= 9) head = `${MONTH[m]} is a weaker month here`;
+  else head = `${MONTH[m]} is one of the worst months here`;
+  return { head, sub: `${ord(r)} best of 12. Weather for ${STYNAME[st.style]}: ${qual(s)}.`, r };
+}
+function renderPanel() {
+  if (!st.sel || !ready) return;
+  const [lon, lat] = st.sel, k = kAt(lon, lat, true), far = approx;
+  const near = nearCity(lon, lat);
+  $("p-title").textContent = near ? near.text : fmtLL(lon, lat);
+  $("p-coords").textContent = fmtLL(lon, lat);
+  if (k < 0) {
+    $("p-verdict").textContent = "No climate data at this spot"; $("p-sub").textContent = "The data covers land only, and there is none within about 100 km.";
+    $("p-chip").style.background = "transparent"; $("p-facts").innerHTML = ""; $("p-rows").innerHTML = ""; $("p-best").textContent = ""; return;
+  }
+  const v = verdict(k, st.month), c = cell(k, st.month);
+  $("p-verdict").textContent = v.head; $("p-sub").textContent = v.sub + (far ? " No data for this exact spot, so this uses the nearest land in the data." : "");
+  $("p-chip").style.background = lutCss[colorIndex(k, st.month)];
+  $("p-facts").innerHTML = [["High", fmtT(c.tmax)], ["Low", fmtT(c.tmin)], ["Rain", fmtR(c.pre)], ["Wet days", Math.round(c.wet)]]
+    .map(([a, b]) => `<div><dt>${a}</dt><dd>${b}</dd></div>`).join("");
+  const rows = [];
+  for (let m = 0; m < 12; m++) {
+    const d = cell(k, m), s = S[m * L + k];
+    rows.push(`<tr data-m="${m}" aria-selected="${m === st.month}"><td><button type="button">${MON[m]}</button></td>` +
+      `<td class="barcell"><div class="bar" style="width:${Math.max(2, Math.round(s * 100))}%;background:${lutCss[colorIndex(k, m)]}" title="Score ${Math.round(s * 100)} of 100"></div></td>` +
+      `<td>${fmtT(d.tmax)} / ${fmtT(d.tmin)}</td><td>${fmtR(d.pre)}</td></tr>`);
+  }
+  $("p-rows").innerHTML = rows.join("");
+  const { order } = ranking(k);
+  $("p-best").textContent = MAX[k] - MIN[k] < 0.08 ? "No month stands out here."
+    : `Best months: ${order.slice(0, 3).map(m => MON[m]).join(", ")}. Weakest: ${order.slice(-3).reverse().map(m => MON[m]).join(", ")}.`;
+}
+
+/* ---------- controls ---------- */
+function syncControls() {
+  document.querySelectorAll("#months button").forEach((b, i) => b.setAttribute("aria-pressed", i === st.month));
+  document.querySelectorAll("#modes button").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === st.mode));
+  document.querySelectorAll("#units button").forEach(b => b.setAttribute("aria-pressed", b.dataset.unit === st.unit));
+  $("style").value = st.style;
+}
+function refresh(level) { // 2 = rescore, 1 = recolour, 0 = panel only
+  if (!ready) return;
+  if (level >= 2) computeScores();
+  if (level >= 1) { readTheme(); paintRaster(); redraw(); }
+  syncControls(); renderPanel(); save();
+}
+$("months").innerHTML = MON.map((m, i) => `<button type="button" id="mon-${i}" data-m="${i}" title="${MONTH[i]}">${m}</button>`).join("");
+$("months").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { st.month = +b.dataset.m; refresh(1); } });
+$("modes").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { st.mode = b.dataset.mode; refresh(1); } });
+$("units").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { st.unit = b.dataset.unit; refresh(0); } });
+$("style").addEventListener("change", e => { st.style = e.target.value; refresh(2); });
+$("p-rows").addEventListener("click", e => { const r = e.target.closest("tr"); if (r) { st.month = +r.dataset.m; refresh(1); } });
+$("zin").addEventListener("click", () => zoomAt(cw / 2, ch / 2, 1.6));
+$("zout").addEventListener("click", () => zoomAt(cw / 2, ch / 2, 1 / 1.6));
+$("zreset").addEventListener("click", () => { view.z = 0; view.cx = 0.5; view.cy = 0.42; clampView(); redraw(); });
+
+/* ---------- pointer input ---------- */
+const pts = new Map(); let moved = 0, pinch = 0;
+const tip = $("tip");
+const local = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+cv.addEventListener("pointerdown", e => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, local(e)); moved = 0; pinch = 0; cv.classList.add("drag"); tip.hidden = true; });
+cv.addEventListener("pointermove", e => {
+  const p = local(e);
+  if (!pts.has(e.pointerId)) { if (e.pointerType === "mouse") hover(p); return; }
+  const prev = pts.get(e.pointerId); pts.set(e.pointerId, p);
+  if (pts.size === 1) {
+    view.cx -= (p[0] - prev[0]) / view.z; view.cy -= (p[1] - prev[1]) / view.z; moved += Math.abs(p[0] - prev[0]) + Math.abs(p[1] - prev[1]);
+    clampView(); redraw();
+  } else if (pts.size === 2) {
+    const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (pinch) zoomAt((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, d / pinch);
+    pinch = d; moved = 99;
+  }
+});
+const up = e => {
+  if (!pts.has(e.pointerId)) return;
+  const p = pts.get(e.pointerId); pts.delete(e.pointerId); pinch = 0;
+  if (!pts.size) cv.classList.remove("drag");
+  if (e.type === "pointerup" && moved < 6 && !pts.size) { const ll = lonLatAt(p[0], p[1]); st.sel = [+ll[0].toFixed(3), +ll[1].toFixed(3)]; redraw(); renderPanel(); save(); }
+};
+cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
+cv.addEventListener("pointerleave", () => { tip.hidden = true; });
+cv.addEventListener("wheel", e => { e.preventDefault(); const p = local(e); zoomAt(p[0], p[1], Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0018))); }, { passive: false });
+function hover(p) {
+  if (!ready) return;
+  const [lon, lat] = lonLatAt(p[0], p[1]), k = kAt(lon, lat);
+  if (k < 0) { tip.hidden = true; return; }
+  const near = nearCity(lon, lat), v = verdict(k, st.month), c = cell(k, st.month);
+  tip.innerHTML = `<b></b><span></span>`;
+  tip.firstChild.textContent = near && near.km < 150 ? near.text : fmtLL(lon, lat);
+  tip.lastChild.textContent = `${MON[st.month]}: ${ord(v.r)} best of 12 · ${fmtT(c.tmax)} / ${fmtT(c.tmin)} · ${fmtR(c.pre)}`;
+  tip.hidden = false;
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  tip.style.left = Math.max(4, Math.min(cw - tw - 4, p[0] + 14)) + "px";
+  tip.style.top = Math.max(4, Math.min(ch - th - 4, p[1] + 14)) + "px";
+}
+
+/* ---------- boot ---------- */
+new ResizeObserver(resize).observe(wrap);
+const themed = () => { if (ready) { readTheme(); paintRaster(); redraw(); renderPanel(); } };
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themed);
+new MutationObserver(themed).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+syncControls();
+(async () => {
+  try {
+    loadVectors(); await loadGrid();
+    ready = true; $("loading").hidden = true;
+    if (!st.sel) st.sel = [98.99, 18.79];
+    resize(); refresh(2);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(redraw);
+  } catch (err) {
+    $("loading").textContent = "The climate data could not be loaded in this browser. Try a current version of Chrome, Safari, Edge or Firefox.";
+    console.error(err);
+  }
+})();
+})();
+</script>
+
+</body>
+</html>
